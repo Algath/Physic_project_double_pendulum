@@ -88,6 +88,23 @@ function load_tracker_positions(filepath::String)
     return mass_positions, origin_x, origin_y, scale
 end
 
+function unwrap_angles(angles)
+    """
+    Corrige les sauts de 2π dans une série d'angles pour obtenir une trajectoire continue.
+    Tracker donne des angles entre -180° et 180°, cette fonction les "déroule".
+    """
+    unwrapped = copy(angles)
+    for i in 2:length(unwrapped)
+        diff = unwrapped[i] - unwrapped[i-1]
+        if diff > π
+            unwrapped[i:end] .-= 2π
+        elseif diff < -π
+            unwrapped[i:end] .+= 2π
+        end
+    end
+    return unwrapped
+end
+
 function calculate_angles_from_positions(mass_A_positions, mass_B_positions)
     """
     Calcule les angles θ1 et θ2 à partir des positions des masses.
@@ -101,10 +118,12 @@ function calculate_angles_from_positions(mass_A_positions, mass_B_positions)
     - y positif = vers le bas (masse sous le pivot)
     
     Donc: θ = atan(x, y) donne l'angle depuis la verticale vers le bas
+    
+    Note: Les angles sont "unwrapped" pour éviter les sauts à ±180°
     """
     n = min(length(mass_A_positions), length(mass_B_positions))
-    θ1 = zeros(n)
-    θ2 = zeros(n)
+    θ1_raw = zeros(n)
+    θ2_raw = zeros(n)
     
     for i in 1:n
         x1, y1 = mass_A_positions[i]
@@ -112,13 +131,17 @@ function calculate_angles_from_positions(mass_A_positions, mass_B_positions)
         
         # θ1: angle du premier pendule depuis la verticale vers le bas
         # atan(x, y) où y positif = vers le bas = θ=0
-        θ1[i] = atan(x1, y1)
+        θ1_raw[i] = atan(-x1, y1)
         
         # θ2: angle du deuxième pendule par rapport à la verticale
         dx = x2 - x1
         dy = y2 - y1
-        θ2[i] = atan(dx, dy)
+        θ2_raw[i] = atan(dx, dy)
     end
+    
+    # Unwrap pour avoir des angles continus (corrige les sauts à ±180°)
+    θ1 = unwrap_angles(θ1_raw)
+    θ2 = unwrap_angles(θ2_raw)
     
     return θ1, θ2
 end
@@ -190,12 +213,14 @@ function simulate_pendulum(masses, L1, L2, g, θ1_0, θ2_0, tspan, saveat)
 end
 
 function cost_function(masses, L1, L2, g, θ1_0, θ2_0, t_data, θ1_data, θ2_data)
-    sol = simulate_pendulum(masses, L1, L2, g, θ1_0, θ2_0, (t_data[1], t_data[end]), t_data)
+    # Simuler avec -θ1_0 (convention simulation opposée à Tracker)
+    sol = simulate_pendulum(masses, L1, L2, g, -θ1_0, θ2_0, (t_data[1], t_data[end]), t_data)
     
     # Erreur quadratique (somme des carrés des résidus)
+    # On compare -sol[1,i] avec θ1_data (inversion du signe de la simulation)
     error = 0.0
     for i in 1:length(t_data)
-        error += (sol[1, i] - θ1_data[i])^2 + (sol[3, i] - θ2_data[i])^2
+        error += (-sol[1, i] - θ1_data[i])^2 + (sol[3, i] - θ2_data[i])^2
     end
     
     return error
@@ -287,24 +312,32 @@ println("  m2 = $(m_opt[2]*1000) g")
 println("  Ratio m2/m1 = $(m_opt[2]/m_opt[1])")
 println("  Erreur finale = $(Optim.minimum(result))")
 
-u0 = [θ1_0, 0.0, θ2_0, 0.0]
+# Simuler avec -θ1_0 (convention simulation opposée à Tracker pour θ1)
+u0 = [-θ1_0, 0.0, θ2_0, 0.0]
 p_opt = [m_opt[1], m_opt[2], L1, L2, g]  # L1 et L2 déjà en mètres
 prob_opt = ODEProblem(equations_double_pendulum!, u0, (t_data[1], t_data[end]), p_opt)
 sol_opt = solve(prob_opt, Tsit5(), saveat=t_data)
 
-# Calculer et afficher les métriques
-metrics = calculate_metrics(t_data, θ1_data, θ2_data, sol_opt)
-println("\nMétriques de comparaison:")
-println("  R² θ1 = $(metrics.R2_θ1)")
-println("  R² θ2 = $(metrics.R2_θ2)")
-println("  RMSE θ1 = $(metrics.RMSE_θ1) rad")
-println("  RMSE θ2 = $(metrics.RMSE_θ2) rad")
+# Inverser le signe de θ1 simulé pour correspondre aux mesures Tracker
+θ1_sim_corrected = -sol_opt[1, :]
+θ2_sim_corrected = sol_opt[3, :]
 
-# Créer le graphique
+# Calculer et afficher les métriques (avec θ1 simulé corrigé)
+R2_θ1 = calculate_R2(θ1_data, θ1_sim_corrected)
+R2_θ2 = calculate_R2(θ2_data, θ2_sim_corrected)
+RMSE_θ1 = calculate_RMSE(θ1_data, θ1_sim_corrected)
+RMSE_θ2 = calculate_RMSE(θ2_data, θ2_sim_corrected)
+println("\nMétriques de comparaison:")
+println("  R² θ1 = $R2_θ1")
+println("  R² θ2 = $R2_θ2")
+println("  RMSE θ1 = $RMSE_θ1 rad")
+println("  RMSE θ2 = $RMSE_θ2 rad")
+
+# Créer le graphique (avec θ1 simulé corrigé)
 p = plot(t_data, θ1_data, label="θ1 mesuré", lw=2, title="Comparaison simulation vs données")
-plot!(p, t_data, sol_opt[1,:], label="θ1 simulé", ls=:dash, lw=2)
+plot!(p, t_data, θ1_sim_corrected, label="θ1 simulé", ls=:dash, lw=2)
 plot!(p, t_data, θ2_data, label="θ2 mesuré", lw=2)
-plot!(p, t_data, sol_opt[3,:], label="θ2 simulé", ls=:dash, lw=2)
+plot!(p, t_data, θ2_sim_corrected, label="θ2 simulé", ls=:dash, lw=2)
 xlabel!(p, "Temps (s)")
 ylabel!(p, "Angle (rad)")
 
@@ -316,12 +349,8 @@ println("\nGraphique sauvegardé: assets/pendule_comparison.png")
 # Animation du pendule double
 # =============================================================================
 
-function animate_pendulum(t_data, θ1_data, θ2_data, sol_opt, L1, L2; fps=30, skip=2)
+function animate_pendulum(t_data, θ1_data, θ2_data, θ1_sim_corrected, θ2_sim_corrected, L1, L2; fps=30, skip=2)
     """Crée une animation GIF du pendule double (mesuré vs simulé)"""
-    
-    # Extraire les angles simulés
-    θ1_sim = sol_opt[1, :]
-    θ2_sim = sol_opt[3, :]
     
     # Calculer les positions (x, y) pour chaque frame
     # Convention pour l'affichage: y négatif vers le bas, x positif vers la droite
@@ -344,8 +373,8 @@ function animate_pendulum(t_data, θ1_data, θ2_data, sol_opt, L1, L2; fps=30, s
         # Positions mesurées
         x1_m, y1_m, x2_m, y2_m = pendulum_positions(θ1_data[i], θ2_data[i], L1, L2)
         
-        # Positions simulées
-        x1_s, y1_s, x2_s, y2_s = pendulum_positions(θ1_sim[i], θ2_sim[i], L1, L2)
+        # Positions simulées (avec θ1 déjà corrigé)
+        x1_s, y1_s, x2_s, y2_s = pendulum_positions(θ1_sim_corrected[i], θ2_sim_corrected[i], L1, L2)
         
         # Créer le plot avec des limites symétriques pour tout voir
         plt = plot(
@@ -377,4 +406,4 @@ function animate_pendulum(t_data, θ1_data, θ2_data, sol_opt, L1, L2; fps=30, s
 end
 
 # Créer l'animation (skip=4 pour accélérer la génération)
-animate_pendulum(t_data, θ1_data, θ2_data, sol_opt, L1, L2, fps=20, skip=4)
+animate_pendulum(t_data, θ1_data, θ2_data, θ1_sim_corrected, θ2_sim_corrected, L1, L2, fps=20, skip=4)

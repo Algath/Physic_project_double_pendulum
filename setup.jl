@@ -5,15 +5,9 @@ using Pkg
 
 # List of required packages
 packages = [
-    "DifferentialEquations",
+    "OrdinaryDiffEq",  # Plus léger que DifferentialEquations
     "Plots",
-    "CSV",
-    "DataFrames",
     "Optim",
-    "LaTeXStrings",
-    "Markdown",
-    "Optimization",
-    "OptimizationOptimJL",
     "LightXML"
 ]
 
