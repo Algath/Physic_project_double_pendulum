@@ -131,7 +131,7 @@ function calculate_angles_from_positions(mass_A_positions, mass_B_positions)
         
         # θ1: angle du premier pendule depuis la verticale vers le bas
         # atan(x, y) où y positif = vers le bas = θ=0
-        θ1_raw[i] = atan(-x1, y1)
+        θ1_raw[i] = atan(x1, y1)
         
         # θ2: angle du deuxième pendule par rapport à la verticale
         dx = x2 - x1
@@ -213,46 +213,15 @@ function simulate_pendulum(masses, L1, L2, g, θ1_0, θ2_0, tspan, saveat)
 end
 
 function cost_function(masses, L1, L2, g, θ1_0, θ2_0, t_data, θ1_data, θ2_data)
-    # Simuler avec -θ1_0 (convention simulation opposée à Tracker)
-    sol = simulate_pendulum(masses, L1, L2, g, -θ1_0, θ2_0, (t_data[1], t_data[end]), t_data)
+    sol = simulate_pendulum(masses, L1, L2, g, θ1_0, θ2_0, (t_data[1], t_data[end]), t_data)
     
     # Erreur quadratique (somme des carrés des résidus)
-    # On compare -sol[1,i] avec θ1_data (inversion du signe de la simulation)
     error = 0.0
     for i in 1:length(t_data)
-        error += (-sol[1, i] - θ1_data[i])^2 + (sol[3, i] - θ2_data[i])^2
+        error += (sol[1, i] - θ1_data[i])^2 + (sol[3, i] - θ2_data[i])^2
     end
     
     return error
-end
-
-# =============================================================================
-# Fonctions de métriques pour comparer simulation et mesures
-# =============================================================================
-
-function calculate_R2(y_measured, y_simulated)
-    """Calcule le coefficient de détermination R²"""
-    ss_res = sum((y_measured .- y_simulated).^2)
-    ss_tot = sum((y_measured .- mean(y_measured)).^2)
-    return 1 - ss_res / ss_tot
-end
-
-function calculate_RMSE(y_measured, y_simulated)
-    """Calcule l'erreur quadratique moyenne (RMSE)"""
-    return sqrt(mean((y_measured .- y_simulated).^2))
-end
-
-function calculate_metrics(t_data, θ1_data, θ2_data, sol)
-    """Calcule toutes les métriques de comparaison"""
-    θ1_sim = sol[1, :]
-    θ2_sim = sol[3, :]
-    
-    R2_θ1 = calculate_R2(θ1_data, θ1_sim)
-    R2_θ2 = calculate_R2(θ2_data, θ2_sim)
-    RMSE_θ1 = calculate_RMSE(θ1_data, θ1_sim)
-    RMSE_θ2 = calculate_RMSE(θ2_data, θ2_sim)
-    
-    return (R2_θ1=R2_θ1, R2_θ2=R2_θ2, RMSE_θ1=RMSE_θ1, RMSE_θ2=RMSE_θ2)
 end
 
 # =============================================================================
@@ -294,8 +263,15 @@ else
 end
 
 # Utiliser Optim.jl directement pour NelderMead (plus simple et sans problème de gradients)
+# Optimiser sur les 0.02s premières secondes seulement (plus stable)
+t_optim_end = 0.02
+idx_optim = findlast(t -> t <= t_optim_end, t_data)
+t_optim = t_data[1:idx_optim]
+θ1_optim = θ1_data[1:idx_optim]
+θ2_optim = θ2_data[1:idx_optim]
+
 function objective(masses)
-    return cost_function(masses, L1, L2, g, θ1_0, θ2_0, t_data, θ1_data, θ2_data)
+    return cost_function(masses, L1, L2, g, θ1_0, θ2_0, t_optim, θ1_optim, θ2_optim)
 end
 
 m_init = [0.05, 0.03]  # kg - valeurs initiales raisonnables
@@ -312,98 +288,15 @@ println("  m2 = $(m_opt[2]*1000) g")
 println("  Ratio m2/m1 = $(m_opt[2]/m_opt[1])")
 println("  Erreur finale = $(Optim.minimum(result))")
 
-# Simuler avec -θ1_0 (convention simulation opposée à Tracker pour θ1)
-u0 = [-θ1_0, 0.0, θ2_0, 0.0]
-p_opt = [m_opt[1], m_opt[2], L1, L2, g]  # L1 et L2 déjà en mètres
+# Simulation finale avec les masses optimisées
+u0 = [θ1_0, 0.0, θ2_0, 0.0]
+p_opt = [m_opt[1], m_opt[2], L1, L2, g]
 prob_opt = ODEProblem(equations_double_pendulum!, u0, (t_data[1], t_data[end]), p_opt)
 sol_opt = solve(prob_opt, Tsit5(), saveat=t_data)
 
-# Inverser le signe de θ1 simulé pour correspondre aux mesures Tracker
-θ1_sim_corrected = -sol_opt[1, :]
-θ2_sim_corrected = sol_opt[3, :]
+θ1_sim = sol_opt[1, :]
+θ2_sim = sol_opt[3, :]
 
-# Calculer et afficher les métriques (avec θ1 simulé corrigé)
-R2_θ1 = calculate_R2(θ1_data, θ1_sim_corrected)
-R2_θ2 = calculate_R2(θ2_data, θ2_sim_corrected)
-RMSE_θ1 = calculate_RMSE(θ1_data, θ1_sim_corrected)
-RMSE_θ2 = calculate_RMSE(θ2_data, θ2_sim_corrected)
-println("\nMétriques de comparaison:")
-println("  R² θ1 = $R2_θ1")
-println("  R² θ2 = $R2_θ2")
-println("  RMSE θ1 = $RMSE_θ1 rad")
-println("  RMSE θ2 = $RMSE_θ2 rad")
-
-# Créer le graphique (avec θ1 simulé corrigé)
-p = plot(t_data, θ1_data, label="θ1 mesuré", lw=2, title="Comparaison simulation vs données")
-plot!(p, t_data, θ1_sim_corrected, label="θ1 simulé", ls=:dash, lw=2)
-plot!(p, t_data, θ2_data, label="θ2 mesuré", lw=2)
-plot!(p, t_data, θ2_sim_corrected, label="θ2 simulé", ls=:dash, lw=2)
-xlabel!(p, "Temps (s)")
-ylabel!(p, "Angle (rad)")
-
-# Sauvegarder le graphique
-savefig(p, "assets/pendule_comparison.png")
-println("\nGraphique sauvegardé: assets/pendule_comparison.png")
-
-# =============================================================================
-# Animation du pendule double
-# =============================================================================
-
-function animate_pendulum(t_data, θ1_data, θ2_data, θ1_sim_corrected, θ2_sim_corrected, L1, L2; fps=30, skip=2)
-    """Crée une animation GIF du pendule double (mesuré vs simulé)"""
-    
-    # Calculer les positions (x, y) pour chaque frame
-    # Convention pour l'affichage: y négatif vers le bas, x positif vers la droite
-    # Mais on inverse x pour correspondre à la vidéo (pendule tombe vers la gauche)
-    function pendulum_positions(θ1, θ2, L1, L2)
-        # Inverser le signe de sin pour que θ positif = vers la gauche
-        x1 = -L1 * sin(θ1)
-        y1 = -L1 * cos(θ1)
-        x2 = x1 - L2 * sin(θ2)
-        y2 = y1 - L2 * cos(θ2)
-        return x1, y1, x2, y2
-    end
-    
-    # Limites du graphique - augmenter pour voir tout le pendule
-    L_total = (L1 + L2) * 1.3
-    
-    println("Création de l'animation...")
-    
-    anim = @animate for i in 1:skip:length(t_data)
-        # Positions mesurées
-        x1_m, y1_m, x2_m, y2_m = pendulum_positions(θ1_data[i], θ2_data[i], L1, L2)
-        
-        # Positions simulées (avec θ1 déjà corrigé)
-        x1_s, y1_s, x2_s, y2_s = pendulum_positions(θ1_sim_corrected[i], θ2_sim_corrected[i], L1, L2)
-        
-        # Créer le plot avec des limites symétriques pour tout voir
-        plt = plot(
-            xlim=(-L_total, L_total),
-            ylim=(-L_total, L_total),
-            aspect_ratio=:equal,
-            legend=:topright,
-            title="Pendule Double - t = $(round(t_data[i], digits=2)) s",
-            xlabel="x (m)",
-            ylabel="y (m)",
-            size=(600, 600)
-        )
-        
-        # Dessiner le pendule mesuré (bleu)
-        plot!(plt, [0, x1_m, x2_m], [0, y1_m, y2_m], 
-              lw=3, color=:blue, label="Mesuré", marker=:circle, markersize=8)
-        
-        # Dessiner le pendule simulé (rouge, pointillé)
-        plot!(plt, [0, x1_s, x2_s], [0, y1_s, y2_s], 
-              lw=3, color=:red, ls=:dash, label="Simulé", marker=:circle, markersize=8)
-        
-        # Point de pivot
-        scatter!(plt, [0], [0], color=:black, markersize=10, label="Pivot")
-    end
-    
-    # Sauvegarder le GIF
-    gif(anim, "assets/pendule_animation.gif", fps=fps)
-    println("Animation sauvegardée: assets/pendule_animation.gif")
-end
-
-# Créer l'animation (skip=4 pour accélérer la génération)
-animate_pendulum(t_data, θ1_data, θ2_data, θ1_sim_corrected, θ2_sim_corrected, L1, L2, fps=20, skip=4)
+println("\nOptimisation sur les $(t_optim_end*1000) premières ms ($idx_optim frames)")
+println("Simulation terminée sur $(t_data[end])s ($(length(t_data)) frames).")
+println("Exécutez statistiques.jl pour les analyses détaillées.")

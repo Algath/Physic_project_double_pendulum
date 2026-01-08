@@ -22,4 +22,3 @@ for pkg in packages
 end
 
 println("\nAll packages installed successfully!")
-println("You can now use: include(\"imports.jl\") in your main file")
