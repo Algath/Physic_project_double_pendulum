@@ -1,4 +1,5 @@
 # Physic_project_double_pendule — README
+https://github.com/Algath/Physic_project_double_pendulum
 
 This repository implements a double pendulum simulation, parameter estimation from tracker data, and basic analysis tools in Julia.
 

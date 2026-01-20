@@ -437,6 +437,10 @@ savefig(p_angles, "assets/pendule_comparison.png")
 p_energy = plot(t_data, E_total, label="E totale", lw=2, title="Énergie")
 plot!(p_energy, t_data, E_kinetic, label="E cinétique", lw=2)
 plot!(p_energy, t_data, E_potential, label="E potentielle", lw=2)
+E_mean = mean(E_total)
+annotate!(p_energy, t_data[end]*0.7, maximum(E_total)*0.95,
+         text("σ(E) = $(round(E_std, sigdigits=3)) J ($(round(E_std_relative, digits=3))%)", 
+              9, :left, :black))
 xlabel!(p_energy, "Temps (s)")
 ylabel!(p_energy, "Énergie (J)")
 savefig(p_energy, "assets/energie.png")
@@ -504,6 +508,10 @@ function save_frame_detailed(θ1_data, θ2_data, θ1_sim, θ2_sim, L1, L2, m1, m
              text("L₂ = $(round(L2*1000, digits=1)) mm", 8, :left))
     annotate!(plt, -L_total*0.95, L_total*0.64, 
              text("(m₁+m₂)/m₁ = $(round((m1+m2)/m1, digits=2))", 8, :left))
+
+    δ_deg = rad2deg(θ2_data[frame] - θ1_data[frame])
+    annotate!(plt, -L_total*0.95, L_total*0.58, 
+             text("δ = θ₂ - θ₁ = $(round(δ_deg, digits=1))°", 8, :left))
     
     savefig(plt, "assets/pendule_frame1.png")
     println("✓ Frame détaillée sauvegardée: pendule_frame1.png")
